@@ -446,7 +446,7 @@ function buildMap() {
     } else {
       el("circle", { class: "shape", cx: x, cy: y, r: 17 }, g);
       el("text", { class: "id", x, y }, g).textContent = n;
-      dx = 0; dy = -29;
+      dx = 27; dy = -24;
     }
     nodeEls.push(g);
     distEls.push(el("text", { class: "dist", x: x + dx, y: y + dy }, svg));
@@ -471,7 +471,7 @@ function render() {
     if (isBay(n)) {
       c.toggle("occ", bays[n] !== -1);
       c.toggle("target", n === targetBay);
-      nodeEls[n].querySelector(".small").textContent = bays[n] === -1 ? (ACCESSIBLE.has(n) ? "accessible · free" : "free") : `Car #${bays[n]}`;
+      nodeEls[n].querySelector(".small").textContent = bays[n] === -1 ? "free" : `Car #${bays[n]}`;
     }
     distEls[n].textContent = showDist ? (showDist[n] === Infinity ? "∞" : showDist[n]) : "";
   }
