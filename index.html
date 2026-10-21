@@ -1,0 +1,725 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Smart Parking Allocation</title>
+<style>
+:root {
+  --bg: #f3f5f8; --panel: #ffffff; --ink: #161b22; --muted: #5b6573; --line: #d5dae1;
+  --lane: #a3acb8; --asphalt: #eef1f5;
+  --accent: #2563eb; --accent-soft: #dce8ff;
+  --free: #15803d; --free-soft: #dcfce7;
+  --occ: #b45309; --occ-soft: #fdecc8;
+  --closed: #dc2626; --mst: #7c3aed; --mst-soft: #ede4ff;
+  --gate: #111827; --gate-ink: #ffffff; --junction: #ffffff;
+  --settle: #cfe0ff;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #9aa5b1; --line: #2d3540;
+    --lane: #59636f; --asphalt: #1b222b;
+    --accent: #5b9dff; --accent-soft: #1a2e52;
+    --free: #4ade80; --free-soft: #12321f;
+    --occ: #fbbf24; --occ-soft: #3a2a0c;
+    --closed: #f87171; --mst: #a78bfa; --mst-soft: #2a2148;
+    --gate: #e6edf3; --gate-ink: #0d1117; --junction: #161b22;
+    --settle: #1f3a66;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117; --panel: #161b22; --ink: #e6edf3; --muted: #9aa5b1; --line: #2d3540;
+  --lane: #59636f; --asphalt: #1b222b;
+  --accent: #5b9dff; --accent-soft: #1a2e52;
+  --free: #4ade80; --free-soft: #12321f;
+  --occ: #fbbf24; --occ-soft: #3a2a0c;
+  --closed: #f87171; --mst: #a78bfa; --mst-soft: #2a2148;
+  --gate: #e6edf3; --gate-ink: #0d1117; --junction: #161b22;
+  --settle: #1f3a66;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+header {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px;
+  padding: 18px 24px; border-bottom: 1px solid var(--line); background: var(--panel);
+}
+header h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+header .sub { color: var(--muted); font-size: 13px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; align-items: center; }
+.chip {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line);
+  color: var(--muted); white-space: nowrap;
+}
+button, select {
+  font: inherit; font-size: 14px; color: var(--ink); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; cursor: pointer;
+}
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: 0.45; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button.primary kbd { color: #fff; border-color: rgba(255,255,255,0.6); }
+button.on { background: var(--mst-soft); border-color: var(--mst); color: var(--mst); font-weight: 600; }
+kbd {
+  font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--line); color: var(--muted); margin-left: 6px;
+}
+main {
+  display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(320px, 1fr);
+  gap: 16px; padding: 16px 24px; max-width: 1500px; margin: 0 auto;
+}
+@media (max-width: 980px) { main { grid-template-columns: 1fr; padding: 12px 16px; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+.card h2 { margin: 0 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+.controls label { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; padding: 7px 12px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button.sel { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+/* Map */
+svg#map { width: 100%; height: auto; display: block; background: var(--asphalt); border-radius: 10px; }
+.lane line.vis { stroke: var(--lane); stroke-width: 5; stroke-linecap: round; transition: stroke 0.2s, opacity 0.2s; }
+.lane line.hit { stroke: transparent; stroke-width: 18; cursor: pointer; }
+.lane rect { fill: var(--panel); stroke: var(--line); }
+.lane text { font-size: 11px; fill: var(--muted); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.lane.closed line.vis { stroke: var(--closed); stroke-dasharray: 6 7; opacity: 0.8; }
+.lane.closed text { fill: var(--closed); }
+.lane.route line.vis { stroke: var(--accent); stroke-width: 8; }
+.lane.route rect { stroke: var(--accent); }
+.lane.relax line.vis { stroke: var(--occ); stroke-width: 8; }
+.lane.mst line.vis { stroke: var(--mst); stroke-width: 7; }
+.lane.dim line.vis { opacity: 0.25; }
+.node { transition: opacity 0.2s; }
+.node .shape { stroke: var(--lane); stroke-width: 2; fill: var(--junction); transition: fill 0.25s, stroke 0.25s; }
+.node text { text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.node .id { font-size: 13px; font-weight: 600; fill: var(--ink); }
+.node .small { font-size: 10px; fill: var(--muted); }
+.node.gate .shape { fill: var(--gate); stroke: var(--gate); }
+.node.gate .id { fill: var(--gate-ink); }
+.node.gate.src .shape { stroke: var(--accent); stroke-width: 4; }
+.node.bay .shape { fill: var(--free-soft); stroke: var(--free); }
+.node.bay.occ .shape { fill: var(--occ-soft); stroke: var(--occ); }
+.node.bay.occ { cursor: pointer; }
+.node.bay.target .shape { stroke: var(--accent); stroke-width: 4; }
+.node.settled:not(.gate) .shape { fill: var(--settle); }
+.node.bay.settled:not(.occ) .shape { fill: var(--settle); }
+.node.current .shape { stroke: var(--occ); stroke-width: 4; }
+.dist { font-size: 11px; font-weight: 600; fill: var(--accent); text-anchor: middle; dominant-baseline: central; pointer-events: none; }
+.car { fill: var(--accent); stroke: var(--panel); stroke-width: 3; }
+
+/* KPIs */
+.kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.kpi { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.kpi .v { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.kpi .l { font-size: 12px; color: var(--muted); }
+.work { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 10px; }
+.work div { text-align: center; border-radius: 8px; background: var(--asphalt); padding: 8px 4px; }
+.work b { display: block; font-size: 20px; font-variant-numeric: tabular-nums; }
+.work span { font-size: 11px; color: var(--muted); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+th { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+td.route { color: var(--muted); font-size: 12px; }
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; font-weight: 600; white-space: nowrap; }
+.pill.free { background: var(--free-soft); color: var(--free); }
+.pill.occ { background: var(--occ-soft); color: var(--occ); }
+.pill.na { background: var(--asphalt); color: var(--closed); }
+.tablewrap { max-height: 360px; overflow: auto; }
+
+#log { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; font-size: 13px; }
+#log li { padding: 6px 0; border-bottom: 1px solid var(--line); }
+#log li .t { color: var(--muted); font-size: 11px; margin-right: 6px; font-variant-numeric: tabular-nums; }
+#log li.ok { color: var(--free); }
+#log li.bad { color: var(--closed); }
+
+/* Trace */
+#trace { display: none; grid-column: 1 / -1; min-width: 0; }
+#trace.open { display: block; }
+#traceText { font-size: 18px; font-weight: 600; margin: 6px 0 12px; min-height: 27px; }
+.heap { display: flex; flex-wrap: wrap; gap: 6px; min-height: 30px; margin-bottom: 12px; }
+.heap span {
+  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 8px; border-radius: 6px;
+  background: var(--asphalt); border: 1px solid var(--line);
+}
+.heap span:first-child { border-color: var(--accent); color: var(--accent); font-weight: 700; }
+.distrow { overflow-x: auto; }
+.distrow table { min-width: 760px; }
+.distrow td, .distrow th { text-align: center; padding: 5px 4px; }
+.distrow td.hl { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+.distrow td.st { background: var(--settle); }
+
+.algos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; grid-column: 1 / -1; }
+@media (max-width: 980px) { .algos { grid-template-columns: 1fr; } }
+.algos h3 { margin: 0 0 6px; font-size: 16px; }
+.algos .cx { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--accent); margin-bottom: 8px; }
+.algos p { margin: 0; color: var(--muted); font-size: 14px; }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 10px; }
+.legend i { display: inline-block; width: 14px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Smart Parking Allocation System</h1>
+    <div class="sub">DAA Mini Project · CVM University · Anushka Patel, Avi Shah</div>
+  </div>
+  <div class="chips">
+    <span class="chip">21 nodes</span><span class="chip">24 lanes</span>
+    <span class="chip">12 bays</span><span class="chip">2 entrances</span>
+    <button id="themeBtn" title="Toggle theme">Theme</button>
+  </div>
+</header>
+
+<main>
+  <section class="card">
+    <div class="controls">
+      <label>Entrance
+        <span class="seg" id="gateSeg">
+          <button data-v="0" class="sel">Gate A (0)</button><button data-v="1">Gate B (1)</button>
+        </span>
+      </label>
+      <label>Vehicle
+        <span class="seg" id="typeSeg">
+          <button data-v="1" class="sel">Standard</button><button data-v="2">Permit</button>
+        </span>
+      </label>
+      <button class="primary" id="arriveBtn">Car arrives<kbd>A</kbd></button>
+      <button id="traceBtn">Dijkstra trace<kbd>T</kbd></button>
+      <button id="mstBtn">Prim's MST<kbd>M</kbd></button>
+      <label>Animation
+        <select id="speed"><option value="1">Normal</option><option value="0.4">Fast</option><option value="0">Off</option></select>
+      </label>
+      <button id="resetBtn">Reset<kbd>R</kbd></button>
+    </div>
+    <svg id="map" viewBox="0 0 800 620" role="img" aria-label="Parking lot graph"></svg>
+    <div class="legend">
+      <span><i style="background:var(--free-soft);border:1px solid var(--free)"></i>Free bay</span>
+      <span><i style="background:var(--occ-soft);border:1px solid var(--occ)"></i>Occupied</span>
+      <span><i style="background:var(--settle)"></i>Settled by Dijkstra</span>
+      <span><i style="background:var(--accent)"></i>Route</span>
+      <span><i style="background:var(--mst)"></i>MST lane</span>
+      <span><i style="background:var(--closed)"></i>Closed lane</span>
+      <span>♿ accessible bay</span>
+    </div>
+    <div class="hint">Click a lane to close or reopen it. Click an occupied bay to make that car leave.</div>
+  </section>
+
+  <div class="stack">
+    <section class="card">
+      <h2>Lot overview</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="v" id="kFree">12</div><div class="l">Free bays of 12</div></div>
+        <div class="kpi"><div class="v" id="kServed">0</div><div class="l">Cars parked so far</div></div>
+        <div class="kpi"><div class="v" id="kLast">–</div><div class="l" id="kLastL">Last assignment</div></div>
+        <div class="kpi"><div class="v" id="kClosed">0</div><div class="l">Closed lanes</div></div>
+      </div>
+      <div class="work">
+        <div><b id="wS">–</b><span>nodes settled</span></div>
+        <div><b id="wE">–</b><span>lanes examined</span></div>
+        <div><b id="wR">–</b><span>relaxations</span></div>
+        <div><b id="wK">–</b><span>stale skips</span></div>
+      </div>
+    </section>
+
+    <section class="card" id="mstCard" style="display:none">
+      <h2>Prim's MST from Gate A</h2>
+      <div class="kpis">
+        <div class="kpi"><div class="v" id="mTotal">–</div><div class="l">MST length</div></div>
+        <div class="kpi"><div class="v" id="mSaved">–</div><div class="l">Road saved</div></div>
+      </div>
+      <div class="hint" id="mNote"></div>
+    </section>
+
+    <section class="card">
+      <h2 id="tblTitle">Bays by distance from Gate A</h2>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>Bay</th><th>Dist</th><th>Route</th><th>Status</th></tr></thead>
+          <tbody id="bayTbl"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Event log</h2>
+      <ul id="log"></ul>
+    </section>
+  </div>
+
+  <section class="card" id="trace">
+    <div class="controls" style="margin-bottom:4px">
+      <h2 style="margin:0;margin-right:auto" id="traceTitle">Dijkstra step by step</h2>
+      <button id="tFirst">⏮ Start</button>
+      <button id="tPrev">◀ Prev</button>
+      <button id="tPlay">▶ Play</button>
+      <button id="tNext">Next ▶</button>
+      <button id="tEnd">End ⏭</button>
+      <button id="tClose">Close</button>
+    </div>
+    <div class="hint" id="traceStep"></div>
+    <div id="traceText"></div>
+    <h2>Min-heap (distance, node), top first</h2>
+    <div class="heap" id="heapView"></div>
+    <div class="distrow"><table id="distTbl"></table></div>
+  </section>
+
+  <div class="algos">
+    <section class="card">
+      <h3>1. Dijkstra</h3>
+      <div class="cx">O((V + E) log V)</div>
+      <p>A min-heap always pops the closest unsettled node (the greedy choice). Each open lane out of it is relaxed. Heap entries with an outdated, larger distance are skipped (lazy deletion). The nearest free bay of the right type wins, and the route is rebuilt from <code>parent[]</code>.</p>
+    </section>
+    <section class="card">
+      <h3>2. Prim's MST</h3>
+      <div class="cx">O(E log V)</div>
+      <p>The tree grows from Gate A by always adding the cheapest lane that reaches a new node. The result is the least total road that still connects all 21 nodes, using V − 1 = 20 lanes.</p>
+    </section>
+    <section class="card">
+      <h3>3. Lane closures</h3>
+      <div class="cx">dynamic graph</div>
+      <p>Closing a lane flips one flag. Both directions share it because <code>adj[u]</code> stores the lane index. The next Dijkstra or Prim run skips it, so routes and the MST adapt, and unreachable bays are reported.</p>
+    </section>
+  </div>
+</main>
+
+<script>
+// ---------------- Graph (same as DAA.cpp) ----------------
+const N = 21;
+const ENTRANCES = [0, 1];
+const LANES = [
+  [0, 2, 18], [0, 3, 18], [2, 3, 22], [2, 4, 20], [3, 5, 20], [4, 8, 11],
+  [5, 8, 11], [4, 6, 20], [5, 7, 20], [6, 7, 22], [6, 1, 18], [7, 1, 18],
+  [2, 9, 6], [2, 10, 8], [4, 11, 7], [4, 12, 5], [6, 13, 8], [6, 14, 6],
+  [3, 15, 7], [3, 16, 5], [5, 17, 8], [5, 18, 6], [7, 19, 5], [7, 20, 7]
+].map(([u, v, w]) => ({ u, v, w, open: true }));
+const ACCESSIBLE = new Set([16, 19]);
+const adj = Array.from({ length: N }, () => []);
+LANES.forEach((l, i) => { adj[l.u].push([l.v, i]); adj[l.v].push([l.u, i]); });
+
+const POS = {
+  0: [400, 48], 1: [400, 572],
+  2: [250, 130], 3: [550, 130], 4: [250, 310], 5: [550, 310], 8: [400, 310], 6: [250, 490], 7: [550, 490],
+  9: [100, 96], 10: [100, 164], 15: [700, 96], 16: [700, 164],
+  11: [100, 276], 12: [100, 344], 17: [700, 276], 18: [700, 344],
+  13: [100, 456], 14: [100, 524], 19: [700, 456], 20: [700, 524]
+};
+const isBay = n => n >= 9;
+const isGate = n => ENTRANCES.includes(n);
+const gateName = g => g === 0 ? "Gate A" : "Gate B";
+
+// Binary min-heap with a "less" comparator, like priority_queue with greater<>
+class Heap {
+  constructor(less) { this.a = []; this.less = less; }
+  get size() { return this.a.length; }
+  push(x) {
+    const a = this.a; a.push(x);
+    let i = a.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (!this.less(a[i], a[p])) break; [a[i], a[p]] = [a[p], a[i]]; i = p; }
+  }
+  pop() {
+    const a = this.a, top = a[0], last = a.pop();
+    if (a.length) {
+      a[0] = last; let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1; let m = i;
+        if (l < a.length && this.less(a[l], a[m])) m = l;
+        if (r < a.length && this.less(a[r], a[m])) m = r;
+        if (m === i) break; [a[i], a[m]] = [a[m], a[i]]; i = m;
+      }
+    }
+    return top;
+  }
+  sorted() { return this.a.slice().sort((x, y) => this.less(x, y) ? -1 : this.less(y, x) ? 1 : 0); }
+}
+const lexLess = (x, y) => { for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i]; return false; };
+
+// ---------------- Algorithm 1: Dijkstra ----------------
+function dijkstra(src, trace) {
+  const dist = Array(N).fill(Infinity), parent = Array(N).fill(-1);
+  const stats = { settled: 0, edges: 0, relax: 0, stale: 0 };
+  const order = [], events = [];
+  const pq = new Heap(lexLess);
+  const snap = (kind, text, extra) => {
+    if (trace) events.push(Object.assign({ kind, text, heap: pq.sorted(), dist: dist.slice(), parent: parent.slice(), settled: order.slice() }, extra));
+  };
+  dist[src] = 0; pq.push([0, src]);
+  snap("start", `Start at ${gateName(src)}: dist[${src}] = 0, push (0, ${src})`, { u: src });
+  while (pq.size) {
+    const [d, u] = pq.pop();
+    if (d > dist[u]) { stats.stale++; snap("stale", `Pop (${d}, ${u}): stale entry, dist[${u}] is already ${dist[u]}, skip`, { u }); continue; }
+    stats.settled++; order.push(u);
+    snap("pop", `Pop (${d}, ${u}): settle node ${u} at ${d} m`, { u });
+    for (const [v, idx] of adj[u]) {
+      const l = LANES[idx];
+      if (!l.open) continue;
+      stats.edges++;
+      if (dist[u] + l.w < dist[v]) {
+        const old = dist[v];
+        dist[v] = dist[u] + l.w; parent[v] = u; pq.push([dist[v], v]); stats.relax++;
+        snap("relax", `Relax ${u} → ${v}: ${dist[u]} + ${l.w} = ${dist[v]} < ${old === Infinity ? "∞" : old}, parent[${v}] = ${u}`, { u, v, lane: idx });
+      }
+    }
+  }
+  snap("done", `Heap empty: ${stats.settled} settled, ${stats.edges} lanes examined, ${stats.relax} relaxations, ${stats.stale} stale skips`, {});
+  return { dist, parent, stats, order, events };
+}
+
+const pathTo = (parent, t) => { const p = []; for (let c = t; c !== -1; c = parent[c]) p.push(c); return p.reverse(); };
+
+// Same two-pass rule as ParkingLot::allocate
+function allocate(entrance, permit) {
+  const sp = dijkstra(entrance, false);
+  let bay = -1, distance = Infinity, usedFallback = false;
+  for (let pass = 0; pass < 2 && bay === -1; ++pass) {
+    const wantAccessible = permit && pass === 0;
+    if (!permit && pass === 1) break;
+    for (let b = 9; b <= 20; b++) {
+      if (bays[b] === -1 && ACCESSIBLE.has(b) === wantAccessible && sp.dist[b] < distance) { distance = sp.dist[b]; bay = b; }
+    }
+    if (bay !== -1 && pass === 1) usedFallback = true;
+  }
+  return { bay, distance, usedFallback, sp, path: bay === -1 ? [] : pathTo(sp.parent, bay) };
+}
+
+// ---------------- Algorithm 2: Prim's MST (lazy) ----------------
+function primMST() {
+  const pq = new Heap(lexLess), inTree = Array(N).fill(false), chosen = [];
+  let total = 0, reached = 1, allOpen = 0;
+  LANES.forEach(l => { if (l.open) allOpen += l.w; });
+  const s = ENTRANCES[0]; inTree[s] = true;
+  for (const [v, idx] of adj[s]) if (LANES[idx].open) pq.push([LANES[idx].w, idx, v]);
+  while (pq.size) {
+    const [w, idx, v] = pq.pop();
+    if (inTree[v]) continue;
+    inTree[v] = true; reached++; total += w; chosen.push(idx);
+    for (const [x, j] of adj[v]) if (LANES[j].open && !inTree[x]) pq.push([LANES[j].w, j, x]);
+  }
+  return { chosen, total, allOpen, reached };
+}
+
+// ---------------- State ----------------
+let bays, carCounter, gate = 0, vtype = 1, mstOn = false, busy = false, lastStats = null;
+let showDist = null, routeLanes = new Set(), targetBay = -1;
+
+// ---------------- SVG ----------------
+const svg = document.getElementById("map");
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const laneEls = [], nodeEls = [], distEls = [];
+
+function buildMap() {
+  const gl = el("g", {}, svg);
+  LANES.forEach((l, i) => {
+    const [x1, y1] = POS[l.u], [x2, y2] = POS[l.v];
+    const g = el("g", { class: "lane" }, gl);
+    el("line", { class: "vis", x1, y1, x2, y2 }, g);
+    const hit = el("line", { class: "hit", x1, y1, x2, y2 }, g);
+    const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+    el("rect", { x: mx - 15, y: my - 9, width: 30, height: 18, rx: 5 }, g);
+    const t = el("text", { x: mx, y: my }, g); t.textContent = l.w + "m";
+    const title = el("title", {}, hit); title.textContent = `Lane ${l.u} – ${l.v}, ${l.w} m (click to close/open)`;
+    hit.addEventListener("click", () => toggleLane(i));
+    laneEls.push(g);
+  });
+  const gn = el("g", {}, svg);
+  for (let n = 0; n < N; n++) {
+    const [x, y] = POS[n];
+    const g = el("g", { class: "node " + (isGate(n) ? "gate" : isBay(n) ? "bay" : "junction") }, gn);
+    let dx = 0, dy = 0;
+    if (isGate(n)) {
+      el("rect", { class: "shape", x: x - 54, y: y - 20, width: 108, height: 40, rx: 10 }, g);
+      el("text", { class: "id", x, y }, g).textContent = `${gateName(n)} · ${n}`;
+      dx = 82; dy = 0;
+    } else if (isBay(n)) {
+      el("rect", { class: "shape", x: x - 40, y: y - 24, width: 80, height: 48, rx: 6 }, g);
+      el("text", { class: "id", x, y: y - 7 }, g).textContent = (ACCESSIBLE.has(n) ? "♿ " : "") + "Bay " + n;
+      const s = el("text", { class: "small", x, y: y + 11 }, g); s.textContent = "free";
+      g.addEventListener("click", () => { if (bays[n] !== -1) leave(n); });
+      dx = x < 400 ? -62 : 62; dy = 0;
+    } else {
+      el("circle", { class: "shape", cx: x, cy: y, r: 17 }, g);
+      el("text", { class: "id", x, y }, g).textContent = n;
+      dx = 0; dy = -29;
+    }
+    nodeEls.push(g);
+    distEls.push(el("text", { class: "dist", x: x + dx, y: y + dy }, svg));
+  }
+}
+
+let car = null;
+function render() {
+  const closed = LANES.filter(l => !l.open).length;
+  const mst = mstOn ? primMST() : null;
+  const mstSet = mst ? new Set(mst.chosen) : null;
+  LANES.forEach((l, i) => {
+    const c = laneEls[i].classList;
+    c.toggle("closed", !l.open);
+    c.toggle("route", routeLanes.has(i));
+    c.toggle("mst", !!mstSet && mstSet.has(i));
+    c.toggle("dim", !!mstSet && !mstSet.has(i) && l.open);
+  });
+  for (let n = 0; n < N; n++) {
+    const c = nodeEls[n].classList;
+    c.toggle("src", isGate(n) && n === gate);
+    if (isBay(n)) {
+      c.toggle("occ", bays[n] !== -1);
+      c.toggle("target", n === targetBay);
+      nodeEls[n].querySelector(".small").textContent = bays[n] === -1 ? (ACCESSIBLE.has(n) ? "accessible · free" : "free") : `Car #${bays[n]}`;
+    }
+    distEls[n].textContent = showDist ? (showDist[n] === Infinity ? "∞" : showDist[n]) : "";
+  }
+
+  const free = Object.values(bays).filter(c => c === -1).length;
+  document.getElementById("kFree").textContent = free;
+  document.getElementById("kServed").textContent = carCounter - 1;
+  document.getElementById("kClosed").textContent = closed;
+  const s = lastStats;
+  document.getElementById("wS").textContent = s ? s.settled : "–";
+  document.getElementById("wE").textContent = s ? s.edges : "–";
+  document.getElementById("wR").textContent = s ? s.relax : "–";
+  document.getElementById("wK").textContent = s ? s.stale : "–";
+
+  document.getElementById("mstCard").style.display = mst ? "" : "none";
+  document.getElementById("mstBtn").classList.toggle("on", mstOn);
+  if (mst) {
+    document.getElementById("mTotal").textContent = mst.total + " m";
+    document.getElementById("mSaved").textContent = (mst.allOpen - mst.total) + " m";
+    document.getElementById("mNote").textContent = `${mst.chosen.length} lanes chosen out of ${LANES.filter(l => l.open).length} open (${mst.allOpen} m in total).` +
+      (mst.reached < N ? ` Closures split the lot: only ${mst.reached} of ${N} nodes connected.` : "");
+  }
+
+  // Bays by distance from the selected gate
+  const sp = dijkstra(gate, false);
+  document.getElementById("tblTitle").textContent = `Bays by distance from ${gateName(gate)}`;
+  const rows = [];
+  for (let b = 9; b <= 20; b++) rows.push(b);
+  rows.sort((a, b) => sp.dist[a] - sp.dist[b] || a - b);
+  document.getElementById("bayTbl").innerHTML = rows.map(b => {
+    const d = sp.dist[b];
+    const status = bays[b] !== -1 ? `<span class="pill occ">Car #${bays[b]}</span>` : d === Infinity ? `<span class="pill na">Unreachable</span>` : `<span class="pill free">Free</span>`;
+    const route = d === Infinity ? "–" : pathTo(sp.parent, b).join(" → ");
+    return `<tr><td>${ACCESSIBLE.has(b) ? "♿ " : ""}${b}</td><td>${d === Infinity ? "∞" : d + " m"}</td><td class="route">${route}</td><td>${status}</td></tr>`;
+  }).join("");
+}
+
+// ---------------- Log ----------------
+const logEl = document.getElementById("log");
+function log(msg, cls) {
+  const li = document.createElement("li");
+  if (cls) li.className = cls;
+  const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  li.innerHTML = `<span class="t">${t}</span>`;
+  li.appendChild(document.createTextNode(msg));
+  logEl.prepend(li);
+}
+
+// ---------------- Actions ----------------
+const speed = () => parseFloat(document.getElementById("speed").value);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function clearHighlights() {
+  routeLanes = new Set(); targetBay = -1; showDist = null;
+  nodeEls.forEach(g => g.classList.remove("settled", "current"));
+  laneEls.forEach(g => g.classList.remove("relax"));
+  if (car) { car.remove(); car = null; }
+}
+function setBusy(b) {
+  busy = b;
+  ["arriveBtn", "traceBtn", "resetBtn"].forEach(id => document.getElementById(id).disabled = b);
+}
+
+async function arrive() {
+  if (busy) return;
+  closeTrace();
+  setBusy(true);
+  clearHighlights();
+  const permit = vtype === 2, id = carCounter;
+  const a = allocate(gate, permit);
+  lastStats = a.sp.stats;
+  showDist = Array(N).fill(Infinity);
+  render();
+  const k = speed();
+  // Dijkstra wave: nodes light up in the order they are settled
+  for (const u of a.sp.order) {
+    nodeEls[u].classList.add("settled");
+    showDist[u] = a.sp.dist[u];
+    distEls[u].textContent = a.sp.dist[u];
+    if (k) await sleep(70 * k);
+  }
+  showDist = a.sp.dist;
+  if (a.bay === -1) {
+    log(permit ? `Car #${id} (permit) at ${gateName(gate)}: no reachable free bay. Lot is full or lanes are closed.`
+               : `Car #${id} at ${gateName(gate)}: no reachable free standard bay. Accessible bays are reserved for permit holders.`, "bad");
+    render(); setBusy(false); return;
+  }
+  for (let i = 1; i < a.path.length; i++) {
+    const u = a.path[i - 1], v = a.path[i];
+    routeLanes.add(LANES.findIndex(l => (l.u === u && l.v === v) || (l.u === v && l.v === u)));
+  }
+  targetBay = a.bay;
+  render();
+  await driveCar(a.path, k);
+  if (car) { car.remove(); car = null; }
+  bays[a.bay] = id; carCounter++;
+  lastAssign(`Bay ${a.bay}`, `${a.distance} m · Car #${id}`);
+  log(`Car #${id} (${permit ? "permit" : "standard"}) → Bay ${a.bay} at ${a.distance} m via ${a.path.join(" → ")}` +
+      (a.usedFallback ? " (no accessible bay free, nearest standard bay)" : ""), "ok");
+  render(); setBusy(false);
+}
+
+function lastAssign(v, l) {
+  document.getElementById("kLast").textContent = v;
+  document.getElementById("kLastL").textContent = l;
+}
+
+async function driveCar(path, k) {
+  if (car) car.remove();
+  const [sx, sy] = POS[path[0]];
+  car = el("circle", { class: "car", cx: sx, cy: sy, r: 10 }, svg);
+  if (!k) { const [x, y] = POS[path[path.length - 1]]; car.setAttribute("cx", x); car.setAttribute("cy", y); return; }
+  for (let i = 1; i < path.length; i++) {
+    const [x1, y1] = POS[path[i - 1]], [x2, y2] = POS[path[i]];
+    const lane = LANES.find(l => (l.u === path[i - 1] && l.v === path[i]) || (l.v === path[i - 1] && l.u === path[i]));
+    const dur = lane.w * 22 * k;
+    const t0 = performance.now();
+    await new Promise(res => {
+      const step = now => {
+        const t = Math.min(1, (now - t0) / dur), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+        car.setAttribute("cx", x1 + (x2 - x1) * e); car.setAttribute("cy", y1 + (y2 - y1) * e);
+        t < 1 ? requestAnimationFrame(step) : res();
+      };
+      requestAnimationFrame(step);
+    });
+  }
+}
+
+function leave(b) {
+  if (busy) return;
+  const c = bays[b];
+  bays[b] = -1;
+  if (targetBay === b) clearHighlights();
+  log(`Car #${c} left Bay ${b}. Bay is free.`);
+  render();
+}
+
+function toggleLane(i) {
+  if (busy) return;
+  const l = LANES[i];
+  l.open = !l.open;
+  clearHighlights();
+  log(`Lane ${l.u} – ${l.v} (${l.w} m) is now ${l.open ? "OPEN" : "CLOSED"}.`, l.open ? "" : "bad");
+  if (traceOpen()) openTrace(); else render();
+}
+
+function reset() {
+  if (busy) return;
+  bays = {}; for (let b = 9; b <= 20; b++) bays[b] = -1;
+  carCounter = 1; lastStats = null; mstOn = false;
+  LANES.forEach(l => l.open = true);
+  clearHighlights(); closeTrace();
+  lastAssign("–", "Last assignment");
+  logEl.innerHTML = "";
+  log("Lot reset: 12 free bays, all 24 lanes open.");
+  render();
+}
+
+// ---------------- Trace mode ----------------
+let tEvents = [], tIdx = 0, tTimer = null;
+const traceEl = document.getElementById("trace");
+const traceOpen = () => traceEl.classList.contains("open");
+
+function openTrace() {
+  clearHighlights();
+  const r = dijkstra(gate, true);
+  tEvents = r.events; tIdx = 0;
+  lastStats = r.stats;
+  traceEl.classList.add("open");
+  document.getElementById("traceTitle").textContent = `Dijkstra step by step from ${gateName(gate)}`;
+  document.getElementById("traceBtn").classList.add("on");
+  render(); showStep();
+  traceEl.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+function closeTrace() {
+  stopPlay();
+  if (!traceOpen()) return;
+  traceEl.classList.remove("open");
+  document.getElementById("traceBtn").classList.remove("on");
+  clearHighlights(); render();
+}
+function showStep() {
+  const ev = tEvents[tIdx];
+  document.getElementById("traceStep").textContent = `Step ${tIdx + 1} of ${tEvents.length}`;
+  document.getElementById("traceText").textContent = ev.text;
+  document.getElementById("heapView").innerHTML = ev.heap.length ? ev.heap.map(([d, n]) => `<span>(${d}, ${n})</span>`).join("") : `<span style="opacity:.6">empty</span>`;
+  const settled = new Set(ev.settled);
+  nodeEls.forEach((g, n) => { g.classList.toggle("settled", settled.has(n)); g.classList.toggle("current", n === ev.u); });
+  laneEls.forEach((g, i) => g.classList.toggle("relax", i === ev.lane));
+  showDist = ev.dist;
+  const cells = (f, cls) => Array.from({ length: N }, (_, n) => `<td class="${cls ? cls(n) : ""}">${f(n)}</td>`).join("");
+  const hl = n => n === ev.v || (ev.kind !== "relax" && n === ev.u) ? "hl" : settled.has(n) ? "st" : "";
+  document.getElementById("distTbl").innerHTML =
+    `<tr><th>node</th>${cells(n => n)}</tr>` +
+    `<tr><th>dist</th>${cells(n => ev.dist[n] === Infinity ? "∞" : ev.dist[n], hl)}</tr>` +
+    `<tr><th>parent</th>${cells(n => ev.parent[n] === -1 ? "–" : ev.parent[n], hl)}</tr>`;
+  render();
+  document.getElementById("tPrev").disabled = tIdx === 0;
+  document.getElementById("tNext").disabled = tIdx === tEvents.length - 1;
+}
+function stepTo(i) { tIdx = Math.max(0, Math.min(tEvents.length - 1, i)); showStep(); }
+function stopPlay() { if (tTimer) clearInterval(tTimer); tTimer = null; document.getElementById("tPlay").textContent = "▶ Play"; }
+function togglePlay() {
+  if (tTimer) return stopPlay();
+  if (tIdx === tEvents.length - 1) stepTo(0);
+  document.getElementById("tPlay").textContent = "⏸ Pause";
+  tTimer = setInterval(() => { if (tIdx >= tEvents.length - 1) stopPlay(); else stepTo(tIdx + 1); }, 650 * (speed() || 0.4));
+}
+
+// ---------------- Wiring ----------------
+function seg(id, cb) {
+  const s = document.getElementById(id);
+  s.addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b || busy) return;
+    s.querySelectorAll("button").forEach(x => x.classList.toggle("sel", x === b));
+    cb(parseInt(b.dataset.v, 10));
+  });
+}
+seg("gateSeg", v => { gate = v; clearHighlights(); if (traceOpen()) openTrace(); else render(); });
+seg("typeSeg", v => { vtype = v; });
+document.getElementById("arriveBtn").onclick = arrive;
+document.getElementById("traceBtn").onclick = () => traceOpen() ? closeTrace() : openTrace();
+document.getElementById("mstBtn").onclick = () => { if (busy) return; mstOn = !mstOn; if (mstOn) log(`Prim's MST: ${primMST().total} m of road connects the lot.`); render(); };
+document.getElementById("resetBtn").onclick = reset;
+document.getElementById("tFirst").onclick = () => { stopPlay(); stepTo(0); };
+document.getElementById("tPrev").onclick = () => { stopPlay(); stepTo(tIdx - 1); };
+document.getElementById("tNext").onclick = () => { stopPlay(); stepTo(tIdx + 1); };
+document.getElementById("tEnd").onclick = () => { stopPlay(); stepTo(tEvents.length - 1); };
+document.getElementById("tPlay").onclick = togglePlay;
+document.getElementById("tClose").onclick = closeTrace;
+document.getElementById("themeBtn").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+};
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "SELECT" || e.metaKey || e.ctrlKey) return;
+  const k = e.key.toLowerCase();
+  if (k === "a") arrive();
+  else if (k === "t") document.getElementById("traceBtn").click();
+  else if (k === "m") document.getElementById("mstBtn").click();
+  else if (k === "r") reset();
+  else if (traceOpen() && k === "arrowright") { stopPlay(); stepTo(tIdx + 1); }
+  else if (traceOpen() && k === "arrowleft") { stopPlay(); stepTo(tIdx - 1); }
+  else if (traceOpen() && k === " ") { e.preventDefault(); togglePlay(); }
+});
+
+buildMap();
+reset();
+</script>
+</body>
+</html>
